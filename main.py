@@ -3,34 +3,54 @@ import numpy as np
 import math
 import os
 import threading
+import tifffile
 
 images = [
-    './ImgsGE/1 - curitiba.jpg',
-    './ImgsGE/2 - rio de janeiro.jpg',
-    './ImgsGE/3 - sao jorge doeste.jpg',
-    './ImgsGE/4 - barcelona.jpg',
-    './ImgsGE/5 - new dheli.jpg',
-    './ImgsGE/6 - ancara.jpg',
-    './ImgsGE/7 - tokyo.jpg',
-    './ImgsGE/8 - san francisco.jpg',
-    './ImgsGE/9 - las vegas.jpg',
-    './ImgsGE/10 - brasilia.jpg',
-    './ImgsGE/11 - tres lagoas.jpg',
-    './ImgsGE/12 - Inazawa.jpg',
+    'imgstif\script.tiff'
+    # Coloque aqui nomes de imagens .jpg/.png/.tif misturados, se quiser
 ]
+
+
+def load_image_any_format(path):
+    # Tenta carregar com OpenCV (funciona para jpg, png, tiff em geral)
+    img = cv2.imread(path)
+    if img is not None:
+        return img
+
+    # Se for tiff e não carregou, tenta com tifffile
+    ext = os.path.splitext(path)[-1].lower()
+    if ext in ['.tif', '.tiff']:
+        try:
+            arr = tifffile.imread(path)
+            # Normaliza para uint8 (caso seja float ou 16-bit)
+            if arr.dtype != np.uint8:
+                arr = cv2.convertScaleAbs(arr)
+            # Se for grayscale, converte para BGR (mantendo compatibilidade)
+            if len(arr.shape) == 2:
+                arr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
+            elif arr.shape[2] == 4:
+                # Se tiver canal alpha, descarta ou converte
+                arr = arr[:, :, :3]
+            return arr
+        except Exception as e:
+            print(f"Falha ao carregar {path} como TIFF: {e}")
+    return None
+
 
 def calcular_angulo(x1, y1, x2, y2):
     return math.degrees(math.atan2(y2 - y1, x2 - x1))
 
+
 def distancia_pontos(x1, y1, x2, y2):
     return math.hypot(x2 - x1, y2 - y1)
+
 
 def processImg(img, metodo):
     caminho_imagem = img
     os.makedirs('resultados', exist_ok=True)
     nome_arquivo = os.path.basename(caminho_imagem)
 
-    imagem = cv2.imread(caminho_imagem)
+    imagem = load_image_any_format(caminho_imagem)
     if imagem is None:
         print(f"Erro ao carregar a imagem: {caminho_imagem}")
         return
@@ -38,7 +58,6 @@ def processImg(img, metodo):
     saida_img = imagem.copy()
 
     if metodo == 1:
-        # Método 1: Transformada de Hough
         altura, largura = imagem.shape[:2]
         limite_tamanho = max(largura, altura) / 3
 
@@ -66,41 +85,30 @@ def processImg(img, metodo):
                     cv2.line(saida_img, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
     elif metodo == 2:
-        # Método 3: Segmentação por Cor (HSV)
         hsv = cv2.cvtColor(imagem, cv2.COLOR_BGR2HSV)
         lower = np.array([0, 0, 40])
         upper = np.array([180, 60, 130])
         mascara = cv2.inRange(hsv, lower, upper)
-        mascara = cv2.morphologyEx(mascara, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
+        mascara = cv2.morphologyEx(
+            mascara, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
         saida_img[mascara > 0] = [0, 0, 255]  # pintar de vermelho
 
     elif metodo == 3:
-        # Método 4: Contornos + Morfologia (melhorado)
         gray = cv2.cvtColor(imagem, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-
-        # Threshold adaptativo (mais robusto para variações de iluminação)
         thresh = cv2.adaptiveThreshold(
             blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY_INV, 11, 2
         )
-
-        # Fechamento para preencher buracos
         kernel = np.ones((7, 7), np.uint8)
         closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-
-        # Dilatação para engrossar formas finas
         dilated = cv2.dilate(closed, np.ones((3, 3), np.uint8), iterations=1)
-
-        # Encontrar contornos
-        contornos, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
+        contornos, _ = cv2.findContours(
+            dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for cnt in contornos:
             area = cv2.contourArea(cnt)
             x, y, w, h = cv2.boundingRect(cnt)
             aspect_ratio = w / float(h) if h != 0 else 0
-
-            # Critério relaxado para capturar mais formas finas e longas
             if area > 300 and (aspect_ratio > 2 or aspect_ratio < 0.5):
                 cv2.drawContours(saida_img, [cnt], -1, (0, 0, 255), 2)
 
@@ -108,24 +116,16 @@ def processImg(img, metodo):
         print("Método inválido!")
         return
 
-    # Salvar e mostrar
     saida = os.path.join('resultados', f"{metodo}_{nome_arquivo}")
     cv2.imwrite(saida, saida_img)
     print(f"Salvo: {saida}")
 
-    # imagem_resized = cv2.resize(saida_img, (1366, 728))
-    # cv2.imshow(f'Processado ({metodo}) - {nome_arquivo}', imagem_resized)
-    # cv2.waitKey(0)
-    # cv2.destroyAllWindows()
-
-# ===========================
-# MENU INTERATIVO COM THREADS
-# ===========================
 
 def start_thread(img_path, metodo):
     thread = threading.Thread(target=processImg, args=(img_path, metodo))
     thread.start()
     return thread
+
 
 while True:
     print("\n=== Selecione a imagem para processar ===")
@@ -135,7 +135,8 @@ while True:
     print("-1. Sair")
 
     try:
-        escolha = int(input("\nDigite o número da imagem (ou 0 para todas, -1 para sair): "))
+        escolha = int(
+            input("\nDigite o número da imagem (ou 0 para todas, -1 para sair): "))
 
         if escolha == -1:
             print("Encerrando o programa.")
@@ -158,7 +159,6 @@ while True:
                 for img in images:
                     t = start_thread(img, metodo)
                     threads.append(t)
-                # Espera todas as threads terminarem (opcional)
                 for t in threads:
                     t.join()
             else:
