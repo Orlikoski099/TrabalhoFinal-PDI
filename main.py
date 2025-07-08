@@ -38,7 +38,6 @@ def processImg(img, metodo):
     saida_img = imagem.copy()
 
     if metodo == 1:
-        # Método 1: Transformada de Hough
         altura, largura = imagem.shape[:2]
         limite_tamanho = max(largura, altura) / 3
 
@@ -48,14 +47,8 @@ def processImg(img, metodo):
         dilated = cv2.dilate(blurred, kernel, iterations=1)
         edges = cv2.Canny(dilated, 50, 150)
 
-        linhas = cv2.HoughLinesP(
-            edges,
-            rho=1,
-            theta=np.pi/180,
-            threshold=100,
-            minLineLength=100,
-            maxLineGap=50
-        )
+        linhas = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180,
+                                 threshold=80, minLineLength=150, maxLineGap=30)
 
         if linhas is not None:
             for linha in linhas:
@@ -66,33 +59,25 @@ def processImg(img, metodo):
                     cv2.line(saida_img, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
     elif metodo == 2:
-        # Método 3: Segmentação por Cor (HSV)
         hsv = cv2.cvtColor(imagem, cv2.COLOR_BGR2HSV)
-        lower = np.array([0, 0, 40])
-        upper = np.array([180, 60, 130])
+        lower = np.array([0, 0, 60])
+        upper = np.array([180, 30, 180])
         mascara = cv2.inRange(hsv, lower, upper)
         mascara = cv2.morphologyEx(mascara, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
-        saida_img[mascara > 0] = [0, 0, 255]  # pintar de vermelho
+        saida_img[mascara > 0] = [0, 0, 255]
 
     elif metodo == 3:
-        # Método 4: Contornos + Morfologia (melhorado)
         gray = cv2.cvtColor(imagem, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
 
-        # Threshold adaptativo (mais robusto para variações de iluminação)
-        thresh = cv2.adaptiveThreshold(
-            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY_INV, 11, 2
-        )
+        thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                       cv2.THRESH_BINARY_INV, 11, 2)
 
-        # Fechamento para preencher buracos
         kernel = np.ones((7, 7), np.uint8)
         closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
 
-        # Dilatação para engrossar formas finas
         dilated = cv2.dilate(closed, np.ones((3, 3), np.uint8), iterations=1)
 
-        # Encontrar contornos
         contornos, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         for cnt in contornos:
@@ -100,18 +85,39 @@ def processImg(img, metodo):
             x, y, w, h = cv2.boundingRect(cnt)
             aspect_ratio = w / float(h) if h != 0 else 0
 
-            # Critério relaxado para capturar mais formas finas e longas
             if area > 300 and (aspect_ratio > 2 or aspect_ratio < 0.5):
                 cv2.drawContours(saida_img, [cnt], -1, (0, 0, 255), 2)
+
+    elif metodo == 4:
+        hsv = cv2.cvtColor(imagem, cv2.COLOR_BGR2HSV)
+        lower = np.array([0, 0, 60])
+        upper = np.array([180, 30, 180])
+        mascara = cv2.inRange(hsv, lower, upper)
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        mascara = cv2.morphologyEx(mascara, cv2.MORPH_CLOSE, kernel, iterations=2)
+        mascara = cv2.morphologyEx(mascara, cv2.MORPH_OPEN, kernel, iterations=2)
+
+        # (Opcional) Remove áreas pequenas
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mascara, connectivity=8)
+        min_area = 300  # ajuste se necessário
+        mascara_filtrada = np.zeros_like(mascara)
+        for i in range(1, num_labels):
+            if stats[i, cv2.CC_STAT_AREA] > min_area:
+                mascara_filtrada[labels == i] = 255
+        # Se não quiser remover nada, só use "mascara_filtrada = mascara"
+
+        # Pinta as ruas de vermelho, mantém o resto da imagem igual
+        saida_img[mascara_filtrada > 0] = [0, 0, 255]
 
     else:
         print("Método inválido!")
         return
 
-    # Salvar e mostrar
     saida = os.path.join('resultados', f"{metodo}_{nome_arquivo}")
     cv2.imwrite(saida, saida_img)
     print(f"Salvo: {saida}")
+
 
     # imagem_resized = cv2.resize(saida_img, (1366, 728))
     # cv2.imshow(f'Processado ({metodo}) - {nome_arquivo}', imagem_resized)
@@ -146,9 +152,10 @@ while True:
             print("1. Transformada de Hough (linhas retas)")
             print("2. Segmentação por cor (HSV)")
             print("3. Contornos + morfologia")
-            metodo = int(input("Escolha o método (1, 2 ou 3): "))
+            print("4. HSV + Hough")
+            metodo = int(input("Escolha o método (1, 2, 3 ou 4): "))
 
-            if metodo not in [1, 2, 3]:
+            if metodo not in [1, 2, 3, 4]:
                 print("Método inválido. Tente novamente.")
                 continue
 
